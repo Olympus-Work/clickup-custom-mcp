@@ -1,5 +1,5 @@
 /**
- * Six coarse tools, each shaped around a job rather than an endpoint.
+ * Seven coarse tools, each shaped around a job rather than an endpoint.
  *
  * The fan-out lives here, not in the model: one `get_my_work` call costs 2 HTTP
  * requests, where walking space -> folder -> list -> task from the model side costs
@@ -370,6 +370,52 @@ export function registerTools(server: McpServer, clickup: ClickUpClient): void {
         } catch (error) {
           const reason = error instanceof ClickUpError ? error.body : String(error);
           results.push(`- FAILED ${update.task_id}: ${reason}`);
+        }
+      }
+
+      return text(`${results.join("\n")}\n\n_${clickup.calls - before} HTTP request(s)._`);
+    },
+  );
+
+  server.registerTool(
+    "comment_task",
+    {
+      title: "Comment on tasks",
+      description:
+        "Post a comment to one or many tasks — the audit trail for a status change, a dropped ticket, or a design " +
+        "divergence that the task's description should not be rewritten to carry. Each comment is reported individually.",
+      inputSchema: z.object({
+        comments: z
+          .array(
+            z.object({
+              task_id: z.string(),
+              text: z.string().describe("Comment body; ClickUp renders it as plain text"),
+              notify_all: z
+                .boolean()
+                .optional()
+                .describe("Ping every watcher of the task. Default false — a bot note should not page people."),
+            }),
+          )
+          .min(1),
+      }),
+    },
+    async ({ comments }) => {
+      const before = clickup.calls;
+      const results: string[] = [];
+
+      for (const spec of comments) {
+        try {
+          const created = await clickup.request<Record<string, unknown>>(`/task/${spec.task_id}/comment`, {
+            method: "POST",
+            body: {
+              comment_text: spec.text,
+              notify_all: spec.notify_all ?? false,
+            },
+          });
+          results.push(`- commented on ${spec.task_id} (comment ${String(created.id ?? "?")})`);
+        } catch (error) {
+          const reason = error instanceof ClickUpError ? error.body : String(error);
+          results.push(`- FAILED ${spec.task_id}: ${reason}`);
         }
       }
 

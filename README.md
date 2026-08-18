@@ -54,7 +54,7 @@ Run it standalone with `npm start`. stdout is the JSON-RPC channel, so every dia
 
 ## Tools
 
-Six coarse tools, each shaped around a job rather than an endpoint. The fan-out lives in
+Seven coarse tools, each shaped around a job rather than an endpoint. The fan-out lives in
 the server, not in the model: one `get_my_work` call costs 2 HTTP requests where walking
 space → folder → list → task from the model side costs thirty.
 
@@ -66,6 +66,7 @@ space → folder → list → task from the model side costs thirty.
 | `get_task` | Full detail for one task: description, custom field values, subtasks, optionally comments. |
 | `create_task` | Create one or many tasks in a single call. Each is reported individually; one failure does not abort the rest. |
 | `update_task` | Update one or many tasks — status, assignees, due dates, priority, renames, archive. Also reported individually. |
+| `comment_task` | Post a comment to one or many tasks — the audit trail for status changes and dropped tickets. `notify_all` defaults to false. |
 
 Every tool reports how many HTTP requests it spent, and any result that hit the page cap
 says **Truncated** rather than quietly returning a short list.
