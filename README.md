@@ -39,7 +39,7 @@ variables.
 | --- | --- | --- |
 | `CLICKUP_API_TOKEN` | yes | Personal API token. The server exits with a message if it's unset. |
 | `CLICKUP_TEAM_ID` | no | Pin a workspace. Without it the first workspace the token can see is used, and a note goes to stderr if there is more than one. |
-| `CLICKUP_UPLOAD_DIR` | no | The only directory `upload_attachment` may read from. Defaults to `~/Downloads`. |
+| `CLICKUP_UPLOAD_DIR` | no | The only directory `upload_attachment` may read from. Defaults to `~/Downloads`. A leading `~` is expanded to your home folder. |
 | `CLICKUP_MAX_UPLOAD_MB` | no | Largest file `upload_attachment` accepts. Defaults to 50. |
 | `CLICKUP_RATE_LIMIT` | no | Requests/minute the client allows itself. Defaults to 90 — deliberate headroom under ClickUp's 100. |
 
