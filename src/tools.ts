@@ -30,6 +30,13 @@ function toClickUpTimestamp(value: string | undefined): number | undefined {
 const DEFAULT_MAX_UPLOAD_MB = 50;
 const REFUSED_NAME = /^(\.env.*|.*\.pem|.*\.key|id_.*)$/i;
 
+/** A `.env` value is not shell-expanded, so a leading `~` would otherwise be read as a relative folder. */
+function expandHome(path: string): string {
+  if (path === "~") return homedir();
+  if (path.startsWith("~/")) return resolve(homedir(), path.slice(2));
+  return path;
+}
+
 /**
  * Resolve a caller-supplied path to a real file the upload is allowed to read.
  * Throws a clear message for anything outside CLICKUP_UPLOAD_DIR (default ~/Downloads),
@@ -37,7 +44,7 @@ const REFUSED_NAME = /^(\.env.*|.*\.pem|.*\.key|id_.*)$/i;
  */
 async function resolveUploadable(filePath: string): Promise<string> {
   const configured = process.env.CLICKUP_UPLOAD_DIR;
-  const dir = await realpath(configured ? resolve(configured) : resolve(homedir(), "Downloads"));
+  const dir = await realpath(configured ? resolve(expandHome(configured)) : resolve(homedir(), "Downloads"));
   const real = await realpath(resolve(filePath));
   const rel = relative(dir, real);
   if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
