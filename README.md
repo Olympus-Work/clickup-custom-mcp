@@ -51,6 +51,24 @@ claude mcp add clickup-custom-mcp -- node /absolute/path/to/clickup-custom-mcp/d
 
 No `-e CLICKUP_API_TOKEN=...` is needed — the `.env` file covers it.
 
+## Register with Claude Desktop
+
+Add an entry under `mcpServers` in
+`~/Library/Application Support/Claude/claude_desktop_config.json`, then fully quit and
+reopen the app:
+
+```json
+"clickup-custom-mcp": {
+  "command": "/absolute/path/to/node",
+  "args": ["/absolute/path/to/clickup-custom-mcp/dist/index.js"]
+}
+```
+
+Use the absolute path from `which node`: the app does not load your shell profile, so a
+bare `node` (especially an nvm install) is not on its `PATH`. Behind a TLS-intercepting
+proxy, add `"env": { "NODE_EXTRA_CA_CERTS": "/path/to/root.pem" }`. It must be set here
+because Node reads it only at startup, before `.env` is loaded.
+
 Run it standalone with `npm start`. stdout is the JSON-RPC channel, so every diagnostic
 (including a per-request log line with ClickUp's remaining quota) goes to stderr.
 
@@ -69,6 +87,7 @@ space → folder → list → task from the model side costs thirty.
 | `create_task` | Create one or many tasks in a single call. Each is reported individually; one failure does not abort the rest. |
 | `update_task` | Update one or many tasks — status, assignees, due dates, priority, renames, archive. Also reported individually. |
 | `comment_task` | Post a comment to one or many tasks — the audit trail for status changes and dropped tickets. `notify_all` defaults to false. |
+| `upload_attachment` | Attach local files to one or many tasks. Needs a local file path under `CLICKUP_UPLOAD_DIR`; `.env*`, `*.pem`, `*.key`, `id_*` and oversize files are refused. This publishes the file to ClickUp. |
 
 Every tool reports how many HTTP requests it spent, and any result that hit the page cap
 says **Truncated** rather than quietly returning a short list.
@@ -87,7 +106,6 @@ says **Truncated** rather than quietly returning a short list.
   projects down to the fields a person actually reads and renders markdown instead of JSON.
 
 ## Layout
-| `upload_attachment` | Attach local files to one or many tasks. Needs a local file path under `CLICKUP_UPLOAD_DIR`; `.env*`, `*.pem`, `*.key`, `id_*` and oversize files are refused. This publishes the file to ClickUp. |
 
 ```
 src/index.ts    entrypoint: env loading, client + server wiring, stdio transport
