@@ -135,7 +135,7 @@ export class ClickUpClient {
 
   async request<T>(
     path: string,
-    opts: { method?: string; query?: Query; body?: unknown } = {},
+    opts: { method?: string; query?: Query; body?: unknown; form?: FormData } = {},
   ): Promise<T> {
     const method = opts.method ?? "GET";
     const url = this.url(path, opts.query);
@@ -150,9 +150,11 @@ export class ClickUpClient {
           headers: {
             // Personal tokens go in raw — `Bearer` is the OAuth form and is rejected here.
             Authorization: this.token,
-            "Content-Type": "application/json",
+            // A multipart body must not carry our Content-Type: fetch adds it with the boundary.
+            ...(opts.form ? {} : { "Content-Type": "application/json" }),
           },
-          body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+          // A Blob-backed FormData is re-sendable, so the 429 retry loop is safe with it.
+          body: opts.form ?? (opts.body === undefined ? undefined : JSON.stringify(opts.body)),
         });
       } finally {
         this.gate.release();

@@ -1,11 +1,14 @@
 /**
- * Seven coarse tools, each shaped around a job rather than an endpoint.
+ * Eight coarse tools, each shaped around a job rather than an endpoint.
  *
  * The fan-out lives here, not in the model: one `get_my_work` call costs 2 HTTP
  * requests, where walking space -> folder -> list -> task from the model side costs
  * thirty. That difference is the entire reason this server exists.
  */
 
+import { realpath, readFile, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, relative, isAbsolute, resolve } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod";
 import { ClickUpClient, ClickUpError, STRUCTURE_TTL_MS } from "./clickup.js";
@@ -22,6 +25,35 @@ function toClickUpTimestamp(value: string | undefined): number | undefined {
   const ms = new Date(`${value}T00:00:00`).getTime();
   if (!Number.isFinite(ms)) throw new Error(`Unparseable date: ${value}`);
   return ms;
+}
+
+const DEFAULT_MAX_UPLOAD_MB = 50;
+const REFUSED_NAME = /^(\.env.*|.*\.pem|.*\.key|id_.*)$/i;
+
+/**
+ * Resolve a caller-supplied path to a real file the upload is allowed to read.
+ * Throws a clear message for anything outside CLICKUP_UPLOAD_DIR (default ~/Downloads),
+ * sensitive names, non-files, or files over CLICKUP_MAX_UPLOAD_MB — before any read or request.
+ */
+async function resolveUploadable(filePath: string): Promise<string> {
+  const configured = process.env.CLICKUP_UPLOAD_DIR;
+  const dir = await realpath(configured ? resolve(configured) : resolve(homedir(), "Downloads"));
+  const real = await realpath(resolve(filePath));
+  const rel = relative(dir, real);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error(`file is outside the allowed upload directory (${dir})`);
+  }
+  if (REFUSED_NAME.test(basename(filePath)) || REFUSED_NAME.test(basename(real))) {
+    throw new Error("refusing to upload a file with a sensitive name (.env*, *.pem, *.key, id_*)");
+  }
+  const info = await stat(real);
+  if (!info.isFile()) throw new Error("not a regular file");
+  const maxMb = Number(process.env.CLICKUP_MAX_UPLOAD_MB);
+  const cap = (Number.isFinite(maxMb) && maxMb > 0 ? maxMb : DEFAULT_MAX_UPLOAD_MB) * 1024 * 1024;
+  if (info.size > cap) {
+    throw new Error(`file is ${(info.size / 1048576).toFixed(1)} MB, over the ${cap / 1048576} MB cap`);
+  }
+  return real;
 }
 
 const taskFilters = {
@@ -415,6 +447,52 @@ export function registerTools(server: McpServer, clickup: ClickUpClient): void {
           results.push(`- commented on ${spec.task_id} (comment ${String(created.id ?? "?")})`);
         } catch (error) {
           const reason = error instanceof ClickUpError ? error.body : String(error);
+          results.push(`- FAILED ${spec.task_id}: ${reason}`);
+        }
+      }
+
+      return text(`${results.join("\n")}\n\n_${clickup.calls - before} HTTP request(s)._`);
+    },
+  );
+
+  server.registerTool(
+    "upload_attachment",
+    {
+      title: "Attach files to tasks",
+      description:
+        "Upload local files as attachments on one or many tasks. This PUBLISHES the file to ClickUp, so confirm " +
+        "with the user before calling. Only files under CLICKUP_UPLOAD_DIR (default ~/Downloads) are allowed; " +
+        ".env*, *.pem, *.key and id_* are refused, as is anything over the size cap. Each file is reported individually.",
+      inputSchema: z.object({
+        attachments: z
+          .array(
+            z.object({
+              task_id: z.string(),
+              file_path: z.string().describe("Absolute path to a local file"),
+              filename: z.string().optional().describe("Name shown in ClickUp. Defaults to the file's own name."),
+            }),
+          )
+          .min(1),
+      }),
+    },
+    async ({ attachments }) => {
+      const before = clickup.calls;
+      const results: string[] = [];
+
+      for (const spec of attachments) {
+        try {
+          const file = await resolveUploadable(spec.file_path);
+          const form = new FormData();
+          form.append("attachment", new Blob([await readFile(file)]), spec.filename ?? basename(file));
+          const made = await clickup.request<Record<string, unknown>>(`/task/${spec.task_id}/attachment`, {
+            method: "POST",
+            form,
+          });
+          results.push(
+            `- attached ${String(made.title ?? "?")} to ${spec.task_id} (attachment ${String(made.id ?? "?")}) ${String(made.url ?? "")}`,
+          );
+        } catch (error) {
+          const reason = error instanceof ClickUpError ? error.body : error instanceof Error ? error.message : String(error);
           results.push(`- FAILED ${spec.task_id}: ${reason}`);
         }
       }
