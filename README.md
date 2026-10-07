@@ -39,6 +39,8 @@ variables.
 | --- | --- | --- |
 | `CLICKUP_API_TOKEN` | yes | Personal API token. The server exits with a message if it's unset. |
 | `CLICKUP_TEAM_ID` | no | Pin a workspace. Without it the first workspace the token can see is used, and a note goes to stderr if there is more than one. |
+| `CLICKUP_UPLOAD_DIR` | no | The only directory `upload_attachment` may read from. Defaults to `~/Downloads`. |
+| `CLICKUP_MAX_UPLOAD_MB` | no | Largest file `upload_attachment` accepts. Defaults to 50. |
 | `CLICKUP_RATE_LIMIT` | no | Requests/minute the client allows itself. Defaults to 90 — deliberate headroom under ClickUp's 100. |
 
 ## Register with Claude Code
@@ -85,6 +87,7 @@ says **Truncated** rather than quietly returning a short list.
   projects down to the fields a person actually reads and renders markdown instead of JSON.
 
 ## Layout
+| `upload_attachment` | Attach local files to one or many tasks. Needs a local file path under `CLICKUP_UPLOAD_DIR`; `.env*`, `*.pem`, `*.key`, `id_*` and oversize files are refused. This publishes the file to ClickUp. |
 
 ```
 src/index.ts    entrypoint: env loading, client + server wiring, stdio transport
