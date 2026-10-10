@@ -83,7 +83,7 @@ space → folder → list → task from the model side costs thirty.
 | `get_workspace_map` | Spaces, folders, lists (with their status names) and members, plus your own numeric user id. Call it first when you need an id for anything else. Cached 15 minutes; optionally includes custom field definitions. |
 | `get_my_work` | Every open task assigned to you across the workspace, grouped by overdue / today / this week / later. The one for a standup or a backlog sweep. |
 | `search_tasks` | Filtered task query across the whole workspace in one request — lists, spaces, assignees, statuses, tags, due/updated date ranges, ordering. Paginates automatically. |
-| `get_task` | Full detail for one task: description, custom field values, subtasks, optionally comments. |
+| `get_task` | Full detail for one task: markdown description (inline image links kept), custom field values, subtasks, attachment list, optionally comments, image attachments as images (`include_images`), text attachments inlined (`include_text_files`), narrowed with `attachment_names`. |
 | `create_task` | Create one or many tasks in a single call. Each is reported individually; one failure does not abort the rest. |
 | `update_task` | Update one or many tasks — status, assignees, due dates, priority, renames, archive. Also reported individually. |
 | `comment_task` | Post a comment to one or many tasks — the audit trail for status changes and dropped tickets. `notify_all` defaults to false. |

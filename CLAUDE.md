@@ -48,7 +48,8 @@ wrapper the model has to chain.
 
 - **All HTTP goes through `ClickUpClient.request()`.** A raw `fetch` bypasses the sliding-
   window gate, the 429 backoff, and the request counter, which silently breaks the budget
-  the whole design rests on.
+  the whole design rests on. The one exception is `ClickUpClient.download()`, which fetches
+  attachment bytes from the `*.clickup-attachments.com` CDN: not the REST API, no auth sent.
 - **stdout is the JSON-RPC channel.** Every diagnostic uses `console.error`. A stray
   `console.log` corrupts the protocol stream.
 - **Cache structure, never task data.** Hierarchy, custom fields, members and `/user` go
