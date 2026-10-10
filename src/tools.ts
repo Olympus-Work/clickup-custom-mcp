@@ -282,7 +282,7 @@ export function registerTools(server: McpServer, clickup: ClickUpClient): void {
           .boolean()
           .optional()
           .describe(
-            `Inline the contents of text attachments (md, txt, csv, json, yaml, xml, html, log), ` +
+            `Inline the contents of text attachments (md, txt, csv, json, yaml, xml, html, log, or any text/* type), ` +
               `${formatBytes(MAX_TEXT_BYTES)} per file and ${formatBytes(MAX_TEXT_TOTAL)} in total. ` +
               "No API request cost. Default false.",
           ),
@@ -373,10 +373,12 @@ export function registerTools(server: McpServer, clickup: ClickUpClient): void {
           }
           try {
             const bytes = await clickup.download(String(a.url ?? ""));
-            const cap = Math.min(MAX_TEXT_BYTES, MAX_TEXT_TOTAL - used);
-            used += Math.min(bytes.length, cap);
-            const cut = bytes.length > cap ? `\n\n_Truncated: showing the first ${formatBytes(cap)} of ${formatBytes(bytes.length)}._` : "";
-            parts.push(`## file: ${title}\n\`\`\`\`${ext}\n${bytes.subarray(0, cap).toString("utf8")}\n\`\`\`\`${cut}`);
+            let end = Math.min(bytes.length, MAX_TEXT_BYTES, MAX_TEXT_TOTAL - used);
+            // Back off to a UTF-8 character boundary so a cut through Thai text doesn't end in U+FFFD.
+            while (end < bytes.length && end > 0 && (bytes[end]! & 0xc0) === 0x80) end--;
+            used += end;
+            const cut = end < bytes.length ? `\n\n_Truncated: showing the first ${formatBytes(end)} of ${formatBytes(bytes.length)}._` : "";
+            parts.push(`## file: ${title}\n\`\`\`\`${ext}\n${bytes.subarray(0, end).toString("utf8")}\n\`\`\`\`${cut}`);
           } catch (error) {
             notes.push(`- FAILED ${title}: ${error instanceof Error ? error.message : String(error)}`);
           }
@@ -400,6 +402,11 @@ export function registerTools(server: McpServer, clickup: ClickUpClient): void {
           } else {
             try {
               const bytes = await clickup.download(String(a.url ?? ""));
+              // `size` can be missing (NaN passes the check above); the real byte count is what the API limit applies to.
+              if (bytes.length > MAX_IMAGE_BYTES) {
+                notes.push(`- skipped ${title}: ${formatBytes(bytes.length)} is over the ${formatBytes(MAX_IMAGE_BYTES)} cap`);
+                continue;
+              }
               images.push({ type: "image", data: bytes.toString("base64"), mimeType: mime });
               notes.push(`- image ${images.length}: ${title} (${String(a.id ?? "?")})`);
             } catch (error) {
