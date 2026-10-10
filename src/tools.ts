@@ -33,6 +33,11 @@ const MAX_IMAGES = 8;
 /** Base64 adds a third, and the Claude API rejects images over 5 MB. */
 const MAX_IMAGE_BYTES = 3.5 * 1024 * 1024;
 
+/** get_task's include_text_files: ClickUp labels some of these application/octet-stream, so match on extension too. */
+const TEXT_EXTENSIONS = new Set(["md", "markdown", "txt", "csv", "tsv", "json", "yaml", "yml", "xml", "html", "htm", "log"]);
+const MAX_TEXT_BYTES = 100 * 1024;
+const MAX_TEXT_TOTAL = 300 * 1024;
+
 function formatBytes(n: number): string {
   if (!Number.isFinite(n)) return "? B";
   if (n < 1024) return `${n} B`;
@@ -261,7 +266,7 @@ export function registerTools(server: McpServer, clickup: ClickUpClient): void {
       title: "Task detail",
       description:
         "Full detail for one task: markdown description (inline images kept as links), custom field values, " +
-        "subtasks, attachments, and optionally its comments and the image attachments themselves. " +
+        "subtasks, attachments, and optionally its comments and the attachments' contents (images, text files). " +
         "Use it after search_tasks or get_my_work has narrowed things down to a single task.",
       inputSchema: z.object({
         task_id: z.string(),
@@ -273,9 +278,24 @@ export function registerTools(server: McpServer, clickup: ClickUpClient): void {
             `Return image attachments (png/jpeg/gif/webp) as images, up to ${MAX_IMAGES}. ` +
               "No API request cost, but each image uses a lot of context. Default false.",
           ),
+        include_text_files: z
+          .boolean()
+          .optional()
+          .describe(
+            `Inline the contents of text attachments (md, txt, csv, json, yaml, xml, html, log), ` +
+              `${formatBytes(MAX_TEXT_BYTES)} per file and ${formatBytes(MAX_TEXT_TOTAL)} in total. ` +
+              "No API request cost. Default false.",
+          ),
+        attachment_names: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Only fetch these attachments (title or id, as listed by a previous get_task) for include_images " +
+              "and include_text_files — use it to reach files a cap skipped.",
+          ),
       }),
     },
-    async ({ task_id, include_comments, include_images }) => {
+    async ({ task_id, include_comments, include_images, include_text_files, attachment_names }) => {
       const raw = await clickup.request<Record<string, unknown>>(`/task/${task_id}`, {
         query: { include_subtasks: true, include_markdown_description: true },
       });
@@ -323,17 +343,58 @@ export function registerTools(server: McpServer, clickup: ClickUpClient): void {
         parts.push(`## attachments\n${lines.join("\n")}`);
       }
 
+      const wanted = attachment_names ? new Set(attachment_names) : null;
+      const selected = wanted
+        ? attachments.filter((a) => wanted.has(String(a.title ?? "")) || wanted.has(String(a.id ?? "")))
+        : attachments;
+      if (wanted && (include_images || include_text_files)) {
+        const missing = [...wanted].filter(
+          (n) => !attachments.some((a) => String(a.title ?? "") === n || String(a.id ?? "") === n),
+        );
+        if (missing.length) parts.push(`_No attachment named: ${missing.join(", ")}_`);
+      }
+      const capHint = attachment_names ? "" : " — pass attachment_names to fetch it";
+
+      if (include_text_files) {
+        const notes: string[] = [];
+        let used = 0;
+        for (const a of selected) {
+          const ext = String(a.extension ?? "").toLowerCase();
+          if (!String(a.mimetype ?? "").startsWith("text/") && !TEXT_EXTENSIONS.has(ext)) continue;
+          const title = String(a.title ?? "?");
+          // Exported prototypes are often hundreds of KB of minified markup — mostly noise for a model.
+          if (!wanted && (ext === "html" || ext === "htm" || a.mimetype === "text/html")) {
+            notes.push(`- skipped ${title}: HTML is only read when named in attachment_names`);
+            continue;
+          }
+          if (used >= MAX_TEXT_TOTAL) {
+            notes.push(`- skipped ${title}: the ${formatBytes(MAX_TEXT_TOTAL)} total text cap is used up${capHint}`);
+            continue;
+          }
+          try {
+            const bytes = await clickup.download(String(a.url ?? ""));
+            const cap = Math.min(MAX_TEXT_BYTES, MAX_TEXT_TOTAL - used);
+            used += Math.min(bytes.length, cap);
+            const cut = bytes.length > cap ? `\n\n_Truncated: showing the first ${formatBytes(cap)} of ${formatBytes(bytes.length)}._` : "";
+            parts.push(`## file: ${title}\n\`\`\`\`${ext}\n${bytes.subarray(0, cap).toString("utf8")}\n\`\`\`\`${cut}`);
+          } catch (error) {
+            notes.push(`- FAILED ${title}: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        if (notes.length) parts.push(`## text files not shown\n${notes.join("\n")}`);
+      }
+
       const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
       if (include_images) {
         const notes: string[] = [];
-        for (const a of attachments) {
+        for (const a of selected) {
           const mime = String(a.mimetype ?? "");
           if (!mime.startsWith("image/")) continue;
           const title = String(a.title ?? "?");
           if (!IMAGE_MIMES.has(mime)) {
             notes.push(`- skipped ${title}: ${mime} cannot be shown as an image`);
           } else if (images.length >= MAX_IMAGES) {
-            notes.push(`- skipped ${title}: over the ${MAX_IMAGES}-image cap`);
+            notes.push(`- skipped ${title}: over the ${MAX_IMAGES}-image cap${capHint}`);
           } else if (Number(a.size) > MAX_IMAGE_BYTES) {
             notes.push(`- skipped ${title}: ${formatBytes(Number(a.size))} is over the ${formatBytes(MAX_IMAGE_BYTES)} cap`);
           } else {
