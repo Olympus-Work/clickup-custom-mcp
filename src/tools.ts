@@ -27,6 +27,19 @@ function toClickUpTimestamp(value: string | undefined): number | undefined {
   return ms;
 }
 
+/** get_task's include_images: formats a model can view, and caps that keep a reply inside context. */
+const IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const MAX_IMAGES = 8;
+/** Base64 adds a third, and the Claude API rejects images over 5 MB. */
+const MAX_IMAGE_BYTES = 3.5 * 1024 * 1024;
+
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n)) return "? B";
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1048576).toFixed(1)} MB`;
+}
+
 const DEFAULT_MAX_UPLOAD_MB = 50;
 const REFUSED_NAME = /^(\.env.*|.*\.pem|.*\.key|id_.*)$/i;
 
@@ -247,25 +260,29 @@ export function registerTools(server: McpServer, clickup: ClickUpClient): void {
     {
       title: "Task detail",
       description:
-        "Full detail for one task: description, custom field values, subtasks, and optionally its comments. " +
+        "Full detail for one task: markdown description (inline images kept as links), custom field values, " +
+        "subtasks, attachments, and optionally its comments and the image attachments themselves. " +
         "Use it after search_tasks or get_my_work has narrowed things down to a single task.",
       inputSchema: z.object({
         task_id: z.string(),
         include_comments: z.boolean().optional().describe("Costs one extra request. Default false."),
+        include_images: z
+          .boolean()
+          .optional()
+          .describe(
+            `Return image attachments (png/jpeg/gif/webp) as images, up to ${MAX_IMAGES}. ` +
+              "No API request cost, but each image uses a lot of context. Default false.",
+          ),
       }),
     },
-    async ({ task_id, include_comments }) => {
+    async ({ task_id, include_comments, include_images }) => {
       const raw = await clickup.request<Record<string, unknown>>(`/task/${task_id}`, {
-        query: { include_subtasks: true },
+        query: { include_subtasks: true, include_markdown_description: true },
       });
       const task = compactTask(raw);
+      const description = String(raw.markdown_description || raw.description || raw.text_content || "_empty_");
 
-      const parts = [
-        `# ${task.name}`,
-        renderTaskList([task]),
-        "",
-        `## description\n${String(raw.description ?? raw.text_content ?? "_empty_")}`,
-      ];
+      const parts = [`# ${task.name}`, renderTaskList([task]), "", `## description\n${description}`];
 
       const customFields = Array.isArray(raw.custom_fields) ? raw.custom_fields : [];
       const filled = customFields
@@ -294,7 +311,45 @@ export function registerTools(server: McpServer, clickup: ClickUpClient): void {
         parts.push(`## comments\n${rendered || "_none_"}`);
       }
 
-      return text(parts.join("\n"));
+      const attachments = (Array.isArray(raw.attachments) ? raw.attachments : [])
+        .map((a) => (typeof a === "object" && a ? (a as Record<string, unknown>) : null))
+        .filter((a): a is Record<string, unknown> => a !== null && a.deleted !== true);
+      if (attachments.length) {
+        const lines = attachments.map((a) => {
+          // The attachment id is "<uuid>.<ext>"; the same uuid appears in an inline image's URL.
+          const inline = description.includes(String(a.id ?? "").split(".")[0] || "\0") ? " (inline above)" : "";
+          return `- ${String(a.title ?? "?")} — ${String(a.mimetype ?? "?")}, ${formatBytes(Number(a.size))}${inline} ${String(a.url ?? "")}`;
+        });
+        parts.push(`## attachments\n${lines.join("\n")}`);
+      }
+
+      const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+      if (include_images) {
+        const notes: string[] = [];
+        for (const a of attachments) {
+          const mime = String(a.mimetype ?? "");
+          if (!mime.startsWith("image/")) continue;
+          const title = String(a.title ?? "?");
+          if (!IMAGE_MIMES.has(mime)) {
+            notes.push(`- skipped ${title}: ${mime} cannot be shown as an image`);
+          } else if (images.length >= MAX_IMAGES) {
+            notes.push(`- skipped ${title}: over the ${MAX_IMAGES}-image cap`);
+          } else if (Number(a.size) > MAX_IMAGE_BYTES) {
+            notes.push(`- skipped ${title}: ${formatBytes(Number(a.size))} is over the ${formatBytes(MAX_IMAGE_BYTES)} cap`);
+          } else {
+            try {
+              const bytes = await clickup.download(String(a.url ?? ""));
+              images.push({ type: "image", data: bytes.toString("base64"), mimeType: mime });
+              notes.push(`- image ${images.length}: ${title} (${String(a.id ?? "?")})`);
+            } catch (error) {
+              notes.push(`- FAILED ${title}: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          }
+        }
+        parts.push(`## images (in the order attached below)\n${notes.join("\n") || "_none_"}`);
+      }
+
+      return { content: [{ type: "text" as const, text: parts.join("\n") }, ...images] };
     },
   );
 

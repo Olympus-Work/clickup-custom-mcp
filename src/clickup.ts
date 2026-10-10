@@ -195,6 +195,24 @@ export class ClickUpClient {
     }
   }
 
+  /**
+   * Fetch an attachment's bytes from ClickUp's file CDN.
+   *
+   * Not a REST call, so it skips the gate and the request counter. The CDN serves
+   * these unguessable URLs without auth, so the token never leaves api.clickup.com,
+   * and the host check keeps this from fetching anything a task description links to.
+   */
+  async download(url: string): Promise<Buffer> {
+    const host = new URL(url).hostname;
+    if (!host.endsWith(".clickup-attachments.com")) {
+      throw new Error(`refusing to download from ${host}: not a ClickUp attachment host`);
+    }
+    const response = await fetch(url);
+    console.error(`[clickup] CDN GET ${host} -> ${response.status}`);
+    if (!response.ok) throw new ClickUpError(response.status, url, "attachment download failed");
+    return Buffer.from(await response.arrayBuffer());
+  }
+
   /** Memoise structural reads. Task data is deliberately never cached. */
   async cached<T>(key: string, ttlMs: number, load: () => Promise<T>): Promise<T> {
     const hit = this.cache.get(key);
